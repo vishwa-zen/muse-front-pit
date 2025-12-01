@@ -1,0 +1,282 @@
+import axios from "axios";
+
+// Environment variables - using process.env instead of import.meta
+declare const process: {
+  env: {
+    VITE_API_BASE_URL?: string;
+  };
+};
+
+const API_BASE_URL = typeof process !== 'undefined' && process.env?.VITE_API_BASE_URL 
+  ? process.env.VITE_API_BASE_URL 
+  : "http://127.0.0.1:8003/api/v1";
+
+export const apiClient = axios.create({
+  baseURL: API_BASE_URL,
+  headers: {
+    "Content-Type": "application/json",
+  },
+  timeout: 30000,
+});
+
+// Add auth token to requests
+apiClient.interceptors.request.use(
+  (config) => {
+    const token = localStorage.getItem("msal.token");
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
+  },
+  (error) => {
+    return Promise.reject(error);
+  }
+);
+
+// Handle response errors
+apiClient.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401) {
+      localStorage.clear();
+      if (typeof window !== 'undefined') {
+        window.location.href = "/login";
+      }
+    }
+    return Promise.reject(error);
+  }
+);
+
+// Types for API responses
+export interface Incident {
+  sysId: string;
+  incidentNumber: string;
+  shortDescription: string;
+  priority: string;
+  impact: number;
+  status: string;
+  active: boolean;
+  assignedTo: string;
+  deviceName: string;
+  createdBy: string;
+  callerId: string;
+  openedAt: string;
+  lastUpdatedAt: string;
+}
+
+export interface ApiResponse<T> {
+  success: boolean;
+  message: string;
+  data: T;
+  timestamp: string;
+  request_id: string;
+}
+
+export interface IncidentsData {
+  incidents: Incident[];
+}
+
+// Helper function to map priority to color
+export const getPriorityColor = (priority: string): string => {
+  if (priority.includes("Critical") || priority.includes("1")) {
+    return "bg-[#ffe2e2] text-[#c10007] border-[#ffc9c9]";
+  } else if (priority.includes("High") || priority.includes("2")) {
+    return "bg-[#fef9c2] text-[#a65f00] border-[#feef85]";
+  } else if (priority.includes("Medium") || priority.includes("3")) {
+    return "bg-[#fff4e6] text-[#d97706] border-[#fed7aa]";
+  }
+  return "bg-[#f0f9ff] text-[#0369a1] border-[#bae6fd]";
+};
+
+// Helper function to map status to color
+export const getStatusColor = (status: string): string => {
+  if (status === "In Progress") {
+    return "bg-[#ffedd4] text-[#c93400] border-transparent";
+  } else if (status === "New" || status === "Open") {
+    return "bg-[#dbeafe] text-[#1e40af] border-transparent";
+  } else if (status === "Resolved" || status === "Closed") {
+    return "bg-[#d1fae5] text-[#065f46] border-transparent";
+  }
+  return "bg-[#f3f4f6] text-[#374151] border-transparent";
+};
+
+// Helper function to format time ago
+export const getTimeAgo = (dateString: string): string => {
+  const date = new Date(dateString);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMins / 60);
+  const diffDays = Math.floor(diffHours / 24);
+
+  if (diffMins < 60) {
+    return `${diffMins} minute${diffMins !== 1 ? 's' : ''} ago`;
+  } else if (diffHours < 24) {
+    return `${diffHours} hour${diffHours !== 1 ? 's' : ''} ago`;
+  } else if (diffDays < 30) {
+    return `${diffDays} day${diffDays !== 1 ? 's' : ''} ago`;
+  } else {
+    return date.toLocaleDateString();
+  }
+};
+
+// API endpoints
+export const ticketsAPI = {
+  getMyTickets: async () => {
+    try {
+      const response = await apiClient.get<ApiResponse<IncidentsData>>(
+        "/servicenow/technician/FS_Cockpit_Integration/incidents"
+      );
+      
+      if (response.data.success) {
+        // Transform the data to match our UI format
+        const transformedData = response.data.data.incidents.map((incident) => ({
+          id: incident.incidentNumber,
+          sysId: incident.sysId,
+          status: incident.status,
+          statusColor: getStatusColor(incident.status),
+          title: incident.shortDescription,
+          device: incident.deviceName || "N/A",
+          priority: incident.priority,
+          priorityColor: getPriorityColor(incident.priority),
+          time: getTimeAgo(incident.lastUpdatedAt),
+          assignedTo: incident.assignedTo,
+          createdBy: incident.createdBy,
+          callerId: incident.callerId,
+          openedAt: incident.openedAt,
+          lastUpdatedAt: incident.lastUpdatedAt,
+          impact: incident.impact,
+          active: incident.active,
+        }));
+
+        return {
+          data: transformedData,
+          success: true,
+          message: response.data.message,
+        };
+      }
+      
+      throw new Error(response.data.message || "Failed to fetch tickets");
+    } catch (error: any) {
+      console.error("API Error:", error);
+      
+      // Return mock data as fallback
+      return {
+        data: [
+          {
+            id: "INC0012345",
+            sysId: "mock-sys-id",
+            status: "In Progress",
+            statusColor: "bg-[#ffedd4] text-[#c93400] border-transparent",
+            title: "Outlook not responding on LAPTOP-8X7D2K",
+            device: "LAPTOP-8X7D2K",
+            priority: "1 - Critical",
+            priorityColor: "bg-[#ffe2e2] text-[#c10007] border-[#ffc9c9]",
+            time: "2 hours ago",
+            assignedTo: "FS Cockpit Integration",
+            createdBy: "admin",
+            callerId: "John Doe",
+            openedAt: new Date().toISOString(),
+            lastUpdatedAt: new Date().toISOString(),
+            impact: 1,
+            active: true,
+          },
+        ],
+        success: false,
+        message: "Using fallback data",
+      };
+    }
+  },
+  
+  getTicketById: async (id: string) => {
+    try {
+      // First get all tickets, then filter by ID
+      const response = await ticketsAPI.getMyTickets();
+      const ticket = response.data.find((t) => t.id === id);
+      
+      return { 
+        data: ticket || null,
+        success: !!ticket,
+      };
+    } catch (error) {
+      console.error("API Error:", error);
+      return { data: null, success: false };
+    }
+  },
+  
+  searchTickets: async (query: string, type: string) => {
+    try {
+      const response = await ticketsAPI.getMyTickets();
+      
+      if (!query.trim()) {
+        return response;
+      }
+
+      const filtered = response.data.filter((ticket) => {
+        const searchLower = query.toLowerCase();
+        
+        switch (type) {
+          case "Ticket":
+            return ticket.id.toLowerCase().includes(searchLower) ||
+                   ticket.title.toLowerCase().includes(searchLower);
+          case "Device":
+            return ticket.device.toLowerCase().includes(searchLower);
+          case "User":
+            return ticket.callerId?.toLowerCase().includes(searchLower) ||
+                   ticket.createdBy?.toLowerCase().includes(searchLower);
+          default:
+            return ticket.id.toLowerCase().includes(searchLower) ||
+                   ticket.title.toLowerCase().includes(searchLower) ||
+                   ticket.device.toLowerCase().includes(searchLower);
+        }
+      });
+
+      return {
+        data: filtered,
+        success: true,
+        message: `Found ${filtered.length} results`,
+      };
+    } catch (error) {
+      console.error("API Error:", error);
+      return { data: [], success: false };
+    }
+  },
+};
+
+export const diagnosticsAPI = {
+  getRootCauses: async (ticketId: string) => {
+    try {
+      return await apiClient.get(`/diagnostics/${ticketId}/root-causes`);
+    } catch (error) {
+      console.error("API Error:", error);
+      return { data: [] };
+    }
+  },
+  
+  getRecommendedActions: async (ticketId: string) => {
+    try {
+      return await apiClient.get(`/diagnostics/${ticketId}/actions`);
+    } catch (error) {
+      console.error("API Error:", error);
+      return { data: [] };
+    }
+  },
+};
+
+export const systemStatusAPI = {
+  getStatus: async () => {
+    try {
+      return await apiClient.get("/system/status");
+    } catch (error) {
+      console.error("API Error:", error);
+      return {
+        data: [
+          { name: "ServiceNow", status: "operational", color: "bg-[#00c950]" },
+          { name: "Tachyon", status: "operational", color: "bg-[#00c950]" },
+          { name: "Nexthink", status: "degraded", color: "bg-[#f0b100]" },
+          { name: "Intune / SCCM", status: "operational", color: "bg-[#00c950]" },
+        ],
+      };
+    }
+  },
+};
